@@ -1,0 +1,1 @@
+Implement into multiple_bbox_proposals_example.ipynb the possibility to propose bounding boxes using Florence2
