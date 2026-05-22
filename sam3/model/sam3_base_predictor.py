@@ -133,6 +133,13 @@ class Sam3BasePredictor:
             init_kwargs["async_loading_frames"] = self.async_loading_frames
         if hasattr(self, "video_loader_type"):
             init_kwargs["video_loader_type"] = self.video_loader_type
+
+        # Filter init_kwargs to only pass what the model's init_state() accepts
+        import inspect
+
+        sig = inspect.signature(self.model.init_state)
+        valid_params = set(sig.parameters.keys())
+        init_kwargs = {k: v for k, v in init_kwargs.items() if k in valid_params}
         inference_state = self.model.init_state(**init_kwargs)
 
         if not session_id:
@@ -202,8 +209,7 @@ class Sam3BasePredictor:
         valid_params = set(sig.parameters.keys())
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
 
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            frame_idx, outputs = self.model.add_prompt(**filtered_kwargs)
+        frame_idx, outputs = self.model.add_prompt(**filtered_kwargs)
         return {"frame_index": frame_idx, "outputs": outputs}
 
     def remove_object(
