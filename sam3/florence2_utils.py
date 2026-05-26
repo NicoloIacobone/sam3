@@ -9,9 +9,31 @@ def _load_model():
     global _model, _processor
     if _model is None:
         from transformers import AutoProcessor, AutoModelForCausalLM
+        import torch
+        import os
+
         model_id = 'microsoft/Florence-2-large'
-        _model = AutoModelForCausalLM.from_pretrained(model_id,
-                                                       trust_remote_code=True).eval()
+
+        os.environ["FLASH_ATTENTION_SKIP_TORCH_CHECK"] = "True"
+
+        try:
+            _model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                attn_implementation="sdpa"
+            ).eval()
+        except Exception as e:
+            print(f"Failed to load with sdpa attention: {e}")
+            print("Trying with default attention...")
+            _model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                torch_dtype=torch.float32,
+                device_map="cpu"
+            ).eval()
+
         _processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     return _model, _processor
 
