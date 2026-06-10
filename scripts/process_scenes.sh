@@ -1,5 +1,45 @@
 #!/bin/bash
 # Process ScanNet scenes: download, extract, rename, subset, compute masks
+#
+# Specify job name.
+#SBATCH --job-name=process_scenes
+#
+# Specify output file.
+#SBATCH --output=process_scenes_%j.log
+#
+# Specify error file.
+#SBATCH --error=process_scenes_%j.err
+#
+# Specify open mode for log files.
+#SBATCH --open-mode=append
+#
+# Specify time limit.
+#SBATCH --time=24:00:00
+#
+# Specify number of tasks.
+#SBATCH --ntasks=1
+#
+# Specify number of CPU cores per task.
+#SBATCH --cpus-per-task=8
+#
+# Specify memory limit per CPU core.
+#SBATCH --mem-per-cpu=4096
+#
+# Specify number of required GPUs.
+#SBATCH --gpus=rtx_4090:1
+#
+# Specify disk limit on local scratch.
+#SBATCH --tmp=500000
+#
+# Specify email notifications.
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=niacobone@student.ethz.ch
+#
+
+module purge
+module load stack/2024-06 python/3.12.8 cuda/12.8.0 eth_proxy
+cd /cluster/scratch/niacobone/sam3
+source myenv/bin/activate
 
 set -e
 
@@ -11,7 +51,10 @@ MASK_SCRIPT="/cluster/scratch/niacobone/sam3/scripts/save_text_prompt_masks.py"
 PYTHON="/cluster/scratch/niacobone/sam3/myenv/bin/python"
 PYTHON_SENSREADER="/cluster/scratch/niacobone/ScanNet/myenv/bin/python"
 
-SCENES=("scene0001_00" "scene0002_00" "scene0003_00" "scene0004_00")
+SCENES=()
+for i in $(seq 1 150); do
+    SCENES+=("$(printf "scene%04d_00" $i)")
+done
 
 for SCENE in "${SCENES[@]}"; do
     echo "=========================================="
@@ -78,6 +121,10 @@ for SCENE in "${SCENES[@]}"; do
     else
         echo "[$SCENE] Masks already computed, skipping."
     fi
+
+    # Step 6: Clean up unused files (keep only raw_data)
+    echo "[$SCENE] Cleaning up unused files..."
+    find "$SCENE_DIR" -maxdepth 1 -mindepth 1 ! -name "raw_data" -exec rm -rf {} +
 
     echo "[$SCENE] Done!"
 done
