@@ -69,7 +69,7 @@ for SCENE in "${SCENES[@]}"; do
     # Step 1: Download
     if [ ! -f "$SCENE_DIR/${SCENE}.sens" ]; then
         echo "[$SCENE] Downloading..."
-        printf "\n\n" | $PYTHON "$DOWNLOAD_SCRIPT" -o "$SCANNET_DIR" --id "$SCENE"
+        yes '' | $PYTHON "$DOWNLOAD_SCRIPT" -o "$SCANNET_DIR" --id "$SCENE"
     else
         echo "[$SCENE] Already downloaded, skipping."
     fi
