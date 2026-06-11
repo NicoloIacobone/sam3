@@ -14,7 +14,7 @@
 #SBATCH --open-mode=append
 #
 # Specify time limit.
-#SBATCH --time=24:00:00
+#SBATCH --time=08:00:00
 #
 # Specify number of tasks.
 #SBATCH --ntasks=1
@@ -52,7 +52,7 @@ PYTHON="/cluster/scratch/niacobone/sam3/myenv/bin/python"
 PYTHON_SENSREADER="/cluster/scratch/niacobone/ScanNet/myenv/bin/python"
 
 SCENES=()
-for i in $(seq 1 150); do
+for i in $(seq 81 150); do
     SCENES+=("$(printf "scene%04d_00" $i)")
 done
 
@@ -100,14 +100,21 @@ for SCENE in "${SCENES[@]}"; do
         echo "[$SCENE] Images already renamed, skipping."
     fi
 
-    # Step 4: Create subset of 100 images at stride 5
-    if [ ! -d "$SUBSET_DIR" ] || [ "$(ls "$SUBSET_DIR" 2>/dev/null | wc -l)" -lt 100 ]; then
-        echo "[$SCENE] Creating subset..."
+    # Step 4: Create subset of up to 100 images at stride 5
+    # If the scene has fewer than 500 frames, take as many as available (at most 100).
+    TOTAL_IMAGES=$(ls "$COLOR_DIR"/*.jpg 2>/dev/null | wc -l)
+    TARGET_COUNT=$(( (TOTAL_IMAGES + 4) / 5 ))   # frames available at stride 5
+    [ "$TARGET_COUNT" -gt 100 ] && TARGET_COUNT=100
+    if [ ! -d "$SUBSET_DIR" ] || [ "$(ls "$SUBSET_DIR" 2>/dev/null | wc -l)" -lt "$TARGET_COUNT" ]; then
+        echo "[$SCENE] Creating subset ($TARGET_COUNT images from $TOTAL_IMAGES available)..."
         mkdir -p "$SUBSET_DIR"
         for ((i=0; i<100; i++)); do
             idx=$((i * 5))
             filename=$(printf "%05d.jpg" "$idx")
-            cp "$COLOR_DIR/$filename" "$SUBSET_DIR/"
+            # Only copy frames that actually exist; stop once we run out.
+            if [ -f "$COLOR_DIR/$filename" ]; then
+                cp "$COLOR_DIR/$filename" "$SUBSET_DIR/"
+            fi
         done
     else
         echo "[$SCENE] Subset already exists, skipping."
