@@ -52,7 +52,7 @@ PYTHON="/cluster/scratch/niacobone/sam3/myenv/bin/python"
 PYTHON_SENSREADER="/cluster/scratch/niacobone/ScanNet/myenv/bin/python"
 
 SCENES=()
-for i in $(seq 81 150); do
+for i in $(seq 97 150); do
     SCENES+=("$(printf "scene%04d_00" $i)")
 done
 
