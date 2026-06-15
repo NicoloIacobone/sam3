@@ -20,7 +20,9 @@ import time
 import urllib.request
 
 ssl._create_default_https_context = ssl._create_unverified_context
-BASE = "http://kaldir.vc.cit.tum.de/scannet/v2/scans"
+# NOTE: ScanNet v2 reuses the v1 .sens files, so the .sens live under v1/scans
+# (the official download-scannet.py does the same swap). v2/scans/*.sens -> 404.
+BASE = "http://kaldir.vc.cit.tum.de/scannet/v1/scans"
 
 
 def fetch_one(scene: str, scans_dir: str, timeout: int, retries: int) -> str:
