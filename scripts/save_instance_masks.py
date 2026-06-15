@@ -288,7 +288,15 @@ def is_scene_complete(out_root: Path) -> bool:
     return (out_root / ".complete").exists()
 
 
-def process_scene(predictor, scene_dir: Path, qa_frame_count: int) -> dict:
+def process_scene(
+    predictor, scene_dir: Path, qa_frame_count: int, class_masks_mode: str = "compare"
+) -> dict:
+    # class_masks_mode:
+    #   "compare" -> compare instance-union against an existing masks/<class> GT
+    #                (report union-IoU); used when per-class masks already exist.
+    #   "write"   -> WRITE the instance-union into masks/<class> (for new scenes
+    #                with no pre-existing per-class GT); guarantees consistency by
+    #                construction. All 19 classes get a dir (all-zero if absent).
     scene = scene_dir.name
     raw = scene_dir / "raw_data"
     subset_dir = raw / "subset"
@@ -372,15 +380,20 @@ def process_scene(predictor, scene_dir: Path, qa_frame_count: int) -> dict:
                         new_union |= m
                         save_mask_png(m, inst_dir / f"{stem}.png")
 
-                old_path = old_root / class_name / f"{stem}.png"
-                if old_path.exists():
-                    old = np.array(Image.open(old_path)) > 127
-                    i = int(np.logical_and(new_union, old).sum())
-                    u = int(np.logical_or(new_union, old).sum())
-                    inter_px += i
-                    union_px += u
-                    if u > 0:
-                        frame_ious.append(i / u)
+                if class_masks_mode == "write":
+                    # write the per-class union as the masks/ GT (all 19 classes,
+                    # all-zero where the class is absent in this frame)
+                    save_mask_png(new_union, old_root / class_name / f"{stem}.png")
+                else:
+                    old_path = old_root / class_name / f"{stem}.png"
+                    if old_path.exists():
+                        old = np.array(Image.open(old_path)) > 127
+                        i = int(np.logical_and(new_union, old).sum())
+                        u = int(np.logical_or(new_union, old).sum())
+                        inter_px += i
+                        union_px += u
+                        if u > 0:
+                            frame_ious.append(i / u)
 
             for k, frames in instance_masks.items():
                 for fi, pm in frames.items():
@@ -428,6 +441,13 @@ def main() -> None:
         default=Path("/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"),
     )
     parser.add_argument("--qa_frames", type=int, default=10)
+    parser.add_argument(
+        "--class_masks_mode",
+        choices=["compare", "write"],
+        default="compare",
+        help="compare: report union-IoU vs existing masks/. "
+        "write: write the instance-union into masks/ (new scenes, no GT).",
+    )
     parser.add_argument("--force", action="store_true", help="Re-run even if .complete exists.")
     parser.add_argument("--gpus", type=int, nargs="*", default=None)
     parser.add_argument("--checkpoint", type=str, default=None)
@@ -460,7 +480,9 @@ def main() -> None:
             print(f"[{scene_dir.name}] already complete, skipping.", flush=True)
             continue
         try:
-            stats = process_scene(predictor, scene_dir, args.qa_frames)
+            stats = process_scene(
+                predictor, scene_dir, args.qa_frames, args.class_masks_mode
+            )
             total = sum(c["num_instances"] for c in stats["classes"].values())
             print(
                 f"[{scene_dir.name}] DONE: {total} instances total, "
