@@ -1,3 +1,143 @@
+## My contributions
+
+This is a fork of [facebookresearch/sam3](https://github.com/facebookresearch/sam3). All credit for
+SAM 3, its training and its published results goes to Meta Superintelligence Labs. Everything below is
+what I added on top; the rest of this README is theirs.
+
+I used SAM 3 as an **automatic annotator**: to build a 2D instance-segmentation ground truth over
+ScanNet scenes without manual labelling, for a 3D scene-understanding project. The work splits into a
+ScanNet download and preprocessing pipeline, two mask-generation scripts (per class and per instance),
+and an experiment in replacing hand-written text prompts with Florence-2 region proposals.
+
+### What I added
+
+**ScanNet acquisition and preprocessing pipeline**
+
+- **[`scripts/process_scenes.sh`](scripts/process_scenes.sh)** - the end-to-end SLURM driver. For each
+  scene it downloads the `.sens` archive, extracts colour frames via the ScanNet `SensReader`, renames
+  them to a zero-padded 5-digit form, builds a stride-5 subset of up to 100 frames (falling back to
+  however many exist for short scenes), runs mask generation, then deletes everything except
+  `raw_data/`. Every step is guarded by an existence check, so the job is resumable after a timeout.
+- **[`scripts/download-scannet.py`](scripts/download-scannet.py)**,
+  **[`scripts/download_sens.py`](scripts/download_sens.py)** - the downloaders, with
+  [`scripts/instructions_scannet.txt`](scripts/instructions_scannet.txt) recording the official terms
+  and usage.
+- **Second split.** [`scripts/download_split2.sh`](scripts/download_split2.sh),
+  [`download_split2_manual.sh`](scripts/download_split2_manual.sh),
+  [`download_split2_selfheal.sh`](scripts/download_split2_selfheal.sh) (retries failed scenes),
+  [`process_split2.sh`](scripts/process_split2.sh), [`pack_split2.sh`](scripts/pack_split2.sh) and
+  [`fuse_splits.sh`](scripts/fuse_splits.sh) to merge it with the first.
+- **Storage management.** [`stage_to_scratch.sh`](scripts/stage_to_scratch.sh),
+  [`pack_dataset.sh`](scripts/pack_dataset.sh), [`pack_and_report.sh`](scripts/pack_and_report.sh),
+  [`prune_work_color.sh`](scripts/prune_work_color.sh) (drops full-resolution colour once the subset
+  exists), [`cleanup_old_dataset.sh`](scripts/cleanup_old_dataset.sh),
+  [`create_subset.sh`](scripts/create_subset.sh), [`rename.sh`](scripts/rename.sh).
+
+**Mask generation**
+
+- **[`scripts/save_text_prompt_masks.py`](scripts/save_text_prompt_masks.py)** - prompts the SAM 3
+  video predictor with a fixed 19-class ScanNet taxonomy (wall, floor, cabinet, bed, chair, sofa,
+  table, door, window, bookshelf, picture, counter, desk, curtain, refrigerator, shower curtain,
+  toilet, sink, bathtub), propagates through the frame sequence and writes one single-channel uint8
+  PNG per frame per class, values `{0, 255}`. Supports both `sam3` and `sam3.1` predictors and
+  multi-GPU.
+- **[`scripts/save_instance_masks.py`](scripts/save_instance_masks.py)** - the per-**instance**
+  extension, and the most substantial script here. Instead of unioning all objects of a class it keeps
+  SAM 3's individual masklets, tracked across frames by their persistent `out_obj_ids`, and writes
+  `<scene>/raw_data/masks_instance/<class>_<k>/<frame>.png`. It adds:
+  - stable instance indexing, assigned in order of first appearance and never renumbered;
+  - a lost-track re-association safety net on top of SAM 3's own matching: a brand-new `obj_id` is
+    compared by mask IoU against same-class instances that are currently invisible and were last seen
+    within a bounded frame gap, and merged greedily best-IoU-first if it clears the threshold;
+  - special handling for "stuff" classes (wall, floor), which always collapse to a single instance;
+  - per-scene QA output: a colour-consistent overview strip, a `stats.json` with instance counts,
+    union-IoU against the per-class masks, re-association events and wall-clock time, and a
+    `.complete` marker for resumability.
+  The association policy is documented in the script's own module docstring.
+- **[`scripts/gen_instance_report.py`](scripts/gen_instance_report.py)** - aggregates every scene's
+  `stats.json` into a single `INSTANCE_MASKS_README.md` deliverable with the layout, the policy, a
+  per-scene instance-count table and the flagged or failed scenes.
+- **[`scripts/run_instance_masks_bulk.sh`](scripts/run_instance_masks_bulk.sh)** - bulk driver.
+
+**Florence-2 region proposals**
+
+An experiment in dropping the hand-written class list: use Florence-2 to propose regions, then let
+SAM 3 segment them.
+
+- **[`sam3/florence2_utils.py`](sam3/florence2_utils.py)** - `region_proposal()` runs Florence-2-large
+  with the `<REGION_PROPOSAL>` task and converts the returned absolute `[x1, y1, x2, y2]` boxes into
+  the normalised `[x_min, y_min, width, height]` form SAM 3 expects. Lazily loaded and cached, with an
+  `sdpa` attention path and a CPU/float32 fallback.
+- **[`old/florence_unused.py`](old/florence_unused.py)** - a thinner wrapper exposing Florence-2's other task
+  tokens (object detection, detailed caption, caption-to-phrase grounding, open-vocabulary detection,
+  dense region caption), including the `flash_attn` import workaround needed to load the model without
+  it.
+- **[`scripts/debug_florence.py`](scripts/debug_florence.py)**, **[`old/test_florence_standalone.py`](old/test_florence_standalone.py)**,
+  **[`examples/test_florence.ipynb`](examples/test_florence.ipynb)**,
+  **[`examples/segment_with_region_proposal.ipynb`](examples/segment_with_region_proposal.ipynb)**.
+
+**Upstream fixes needed to run this**
+
+- **[`sam3/model/sam3_base_predictor.py`](sam3/model/sam3_base_predictor.py)** - `start_session()`
+  filtered its `add_prompt` kwargs by signature but not its `init_state` kwargs, so the SAM 3.1
+  multiplex predictor crashed on arguments it does not accept. Added the same
+  `inspect.signature`-based filtering for `init_state`. Also removed the `torch.autocast(bfloat16)`
+  wrapper around `add_prompt`.
+- **[`sam3/model_builder.py`](sam3/model_builder.py)** - replaced the deprecated
+  `pkg_resources.resource_filename` with `importlib.resources.files` for locating the BPE vocabulary,
+  in all three builders.
+- **[`sam3/model/sam3_image.py`](sam3/model/sam3_image.py)** - added type annotations to
+  `_run_encoder` and `forward_video_grounding_multigpu`.
+- **[`pyproject.toml`](pyproject.toml)** - added `transformers==4.41.2` for Florence-2.
+
+**Notebooks and notes**
+
+- [`examples/sam3_multiple_bbox_proposals_example.ipynb`](examples/sam3_multiple_bbox_proposals_example.ipynb)
+  and its [`sam3_1_`](examples/sam3_1_multiple_bbox_proposals_example.ipynb) counterpart - tracking
+  several objects at once from several bounding-box prompts.
+- [`examples/sam3_video_bbox_prompt_example.ipynb`](examples/sam3_video_bbox_prompt_example.ipynb),
+  [`examples/test_multi_prompt_video.ipynb`](examples/test_multi_prompt_video.ipynb),
+  [`examples/automatic_mask_generator.ipynb`](examples/automatic_mask_generator.ipynb),
+  [`old/scratch_region_proposal.ipynb`](old/scratch_region_proposal.ipynb).
+- [`docs/prompt_findings.md`](docs/prompt_findings.md) - notes on prompt behaviour, in particular that generic prompts
+  ("all objects", "everything") return nothing, since SAM 3 is built around atomic noun phrases, and
+  that the authors recommend a structured ontology with explicit hard negatives over a flat category
+  list.
+- [`docs/prompt.md`](docs/prompt.md).
+
+### Repository layout
+
+| path | what it is |
+|---|---|
+| [`scripts/`](scripts/) | the ScanNet pipeline, the two mask generators, the report generator, the Florence-2 debug script |
+| [`sam3/florence2_utils.py`](sam3/florence2_utils.py) | the live Florence-2 region proposer |
+| [`examples/`](examples/) | the notebooks |
+| [`docs/`](docs/) | prompt notes and findings |
+| [`old/`](old/) | not used by the current version. See [`old/README.md`](old/README.md) |
+| [`test/`](test/) | upstream's tests, untouched |
+
+### How to run my part
+
+```bash
+# Full pipeline for a range of scenes (edit the SCENES loop and the paths at the top first):
+sbatch scripts/process_scenes.sh
+
+# Per-class masks for one already-extracted scene:
+python scripts/save_text_prompt_masks.py <scene>/raw_data/color \
+    --frame_step 5 --max_frames 100 --version sam3
+
+# Per-instance masks, with the union checked against the existing per-class masks:
+python scripts/save_instance_masks.py scene0097_00 scene0098_00 \
+    --scans_root /path/to/scannet/scans \
+    --class_masks_mode compare \
+    --log_file runs.jsonl
+
+# Aggregate the per-scene stats into the report:
+python scripts/gen_instance_report.py
+```
+
+---
+
 # SAM 3: Segment Anything with Concepts
 
 Meta Superintelligence Labs
